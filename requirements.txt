@@ -1,0 +1,6 @@
+openai
+streamlit
+qdrant-client
+llama-index
+llama-parse
+ragas
