@@ -15,6 +15,7 @@ sys.path.insert(0, str(project_root))
 
 import requests
 import streamlit as st
+import json
 
 from app.components.chat_interface import (
     init_chat_state,
@@ -141,6 +142,88 @@ def handle_query(query: str) -> dict:
         }
 
 
+def handle_query_streaming(query: str, response_placeholder) -> dict:
+    """
+    Handle a user query via the FastAPI streaming backend.
+    
+    Args:
+        query: User's question
+        
+    Returns:
+        Dict with 'response' and 'sources'
+    """
+    collection = st.session_state.get("current_collection")
+    
+    if not collection:
+        logger.warning("Query attempted with no collection")
+        return {
+            "response": "❌ No document loaded. Please upload and process a document first.",
+            "sources": [],
+        }
+    
+    logger.info(f"Streaming query: '{query[:50]}...' on collection '{collection}'")
+    
+    try:
+        response = requests.post(
+            f"{API_URL}/api/query/stream",
+            json={
+                "query": query,
+                "collection_name": collection,
+                "top_k": 5,
+            },
+            stream=True,
+            timeout=120,
+        )
+        
+        if response.status_code != 200:
+            error = response.text
+            logger.error(f"Streaming query failed: {error}")
+            return {
+                "response": f"❌ Error: {error}",
+                "sources": [],
+            }
+        
+        # Create a placeholder for the streaming response
+        full_response = ""
+        sources = []
+        
+        for line in response.iter_lines():
+            if line:
+                line = line.decode('utf-8')
+                if line.startswith('data: '):
+                    data = line[6:]  # Remove 'data: '
+                    if data == '[DONE]':
+                        break
+                    try:
+                        item = json.loads(data)
+                        if item["type"] == "sources":
+                            sources = item["data"]
+                        elif item["type"] == "chunk":
+                            chunk = item["data"]
+                            full_response += chunk
+                            response_placeholder.markdown(full_response)
+                    except json.JSONDecodeError:
+                        continue
+        
+        return {
+            "response": full_response,
+            "sources": sources,
+        }
+        
+    except requests.exceptions.ConnectionError:
+        logger.error("API connection error")
+        return {
+            "response": "❌ Cannot connect to API server. Please ensure it's running.",
+            "sources": [],
+        }
+    except Exception as e:
+        logger.error(f"Streaming query error: {e}")
+        return {
+            "response": f"❌ Error: {str(e)}",
+            "sources": [],
+        }
+
+
 def render_sidebar():
     """Render the sidebar with upload and configuration."""
     with st.sidebar:
@@ -191,8 +274,8 @@ def render_main_content():
     api_available = check_api_health()
     document_ready = st.session_state.get("processing_complete", False)
     
-    # Two-column layout
-    chat_col, source_col = st.columns([3, 2])
+    # Three-column layout: chat, spacer, sources (right sidebar)
+    chat_col, spacer_col, source_col = st.columns([4, 1, 2])
     
     with chat_col:
         st.header("💬 Chat with Documents")
@@ -224,11 +307,14 @@ def render_main_content():
             # Add user message
             add_message("user", prompt)
             
-            # Process query
-            with st.spinner("🔍 Searching and generating response..."):
-                result = handle_query(prompt)
+            # Create placeholder for streaming response
+            response_placeholder = st.empty()
             
-            # Add assistant response
+            # Process query with streaming
+            result = handle_query_streaming(prompt, response_placeholder)
+            
+            # Clear placeholder and add final message
+            response_placeholder.empty()
             add_message("assistant", result["response"], result.get("sources", []))
             
             # Update current sources
@@ -242,6 +328,10 @@ def render_main_content():
                 st.caption("👆 Upload and process a document to enable chat")
             else:
                 st.caption("👆 Start the API server first")
+    
+    with spacer_col:
+        # Empty spacer column
+        pass
     
     with source_col:
         st.header("📚 Sources")

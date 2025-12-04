@@ -295,6 +295,65 @@ class ResponseSynthesizer:
             },
         )
     
+    def synthesize_streaming(
+        self,
+        query: str,
+        nodes: List[NodeWithScore],
+        system_prompt: Optional[str] = None,
+    ):
+        """
+        Generate a streaming response for a query using retrieved context.
+        
+        Yields chunks of the response as they are generated.
+        
+        Args:
+            query: User's question.
+            nodes: Retrieved nodes with relevance scores.
+            system_prompt: Optional custom system prompt.
+        """
+        logger.info(f"Synthesizing streaming response for query: '{query[:50]}...'" if len(query) > 50 else f"Synthesizing streaming response for query: '{query}'")
+        
+        # Handle empty context
+        if not nodes:
+            logger.warning("No context nodes provided, returning no-context response")
+            yield get_no_context_response()
+            return
+        
+        logger.debug(f"Generating streaming response with {len(nodes)} context nodes")
+        
+        # Format context
+        context = self.format_context(nodes)
+        
+        # Determine system prompt
+        if system_prompt is None:
+            multimodal = self.has_multimodal_content(nodes)
+            system_prompt = get_system_prompt(multimodal=multimodal)
+        
+        # Format user prompt
+        user_prompt = format_context_prompt(context, query)
+        
+        # Generate streaming response
+        logger.debug(f"Calling {self.model} API with streaming...")
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                stream=True,
+            )
+            
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        
+        except Exception as e:
+            logger.error(f"Streaming failed: {e}")
+            yield f"Error: {str(e)}"
+    
     def synthesize_with_refinement(
         self,
         query: str,

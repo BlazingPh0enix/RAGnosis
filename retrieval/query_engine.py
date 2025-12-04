@@ -108,6 +108,42 @@ class DocuLensQueryEngine:
             metadata={"llm_model": self.llm_model, "top_k": effective_top_k},
         )
     
+    def query_streaming(self, query_str: str, top_k: Optional[int] = None):
+        """Query the index and generate a streaming response."""
+        from generation.response_synthesizer import create_response_synthesizer
+        
+        effective_top_k = top_k or self.top_k
+        logger.info(f"Processing streaming query: '{query_str[:80]}...'" if len(query_str) > 80 else f"Processing streaming query: '{query_str}'")
+        
+        with LogTimer(logger, "Retrieval"):
+            retrieval_result = self.retriever.retrieve(query_str, effective_top_k)
+        
+        # Create synthesizer for streaming
+        synthesizer = create_response_synthesizer(
+            model=self.llm_model,
+            temperature=self.temperature,
+        )
+        
+        # Get sources for response
+        sources = [
+            {
+                "page_number": s.get("page_number", 1),
+                "content_type": s.get("content_type", "text"),
+                "source_document": s.get("source_document", "unknown"),
+                "score": s.get("score", 0),
+                "text_preview": s.get("text_preview", ""),
+                "image_name": s.get("image_name"),
+            }
+            for s in retrieval_result.sources
+        ]
+        
+        # Yield sources first
+        yield {"type": "sources", "data": sources}
+        
+        # Then yield response chunks
+        for chunk in synthesizer.synthesize_streaming(query_str, retrieval_result.nodes):
+            yield {"type": "chunk", "data": chunk}
+    
     def retrieve_only(self, query_str: str, top_k: Optional[int] = None) -> RetrievalResult:
         """Retrieve relevant nodes without generating a response."""
         return self.retriever.retrieve(query_str, top_k or self.top_k)
