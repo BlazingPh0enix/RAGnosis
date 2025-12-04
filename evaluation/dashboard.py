@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 
 import streamlit as st
 
@@ -39,39 +39,11 @@ class QueryMetrics:
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "query": self.query,
-            "response": self.response,
-            "faithfulness": self.faithfulness,
-            "answer_relevancy": self.answer_relevancy,
-            "context_precision": self.context_precision,
-            "context_recall": self.context_recall,
-            "retrieval_latency_ms": self.retrieval_latency_ms,
-            "generation_latency_ms": self.generation_latency_ms,
-            "rerank_latency_ms": self.rerank_latency_ms,
-            "total_latency_ms": self.total_latency_ms,
-            "num_sources": self.num_sources,
-            "content_types": self.content_types,
-            "timestamp": self.timestamp,
-        }
+        return asdict(self)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "QueryMetrics":
-        return cls(
-            query=data.get("query", ""),
-            response=data.get("response", ""),
-            faithfulness=data.get("faithfulness"),
-            answer_relevancy=data.get("answer_relevancy"),
-            context_precision=data.get("context_precision"),
-            context_recall=data.get("context_recall"),
-            retrieval_latency_ms=data.get("retrieval_latency_ms", 0.0),
-            generation_latency_ms=data.get("generation_latency_ms", 0.0),
-            rerank_latency_ms=data.get("rerank_latency_ms", 0.0),
-            total_latency_ms=data.get("total_latency_ms", 0.0),
-            num_sources=data.get("num_sources", 0),
-            content_types=data.get("content_types", []),
-            timestamp=data.get("timestamp", datetime.now().isoformat()),
-        )
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
@@ -83,55 +55,45 @@ class EvaluationSession:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     metadata: Dict[str, Any] = field(default_factory=dict)
     
-    def add_metrics(self, query_metrics: QueryMetrics) -> None:
-        self.metrics.append(query_metrics)
+    def add_metrics(self, m: QueryMetrics) -> None:
+        self.metrics.append(m)
+    
+    def _avg(self, attr: str) -> Optional[float]:
+        vals = [getattr(m, attr) for m in self.metrics if getattr(m, attr) is not None]
+        return sum(vals) / len(vals) if vals else None
     
     @property
     def avg_faithfulness(self) -> Optional[float]:
-        values = [m.faithfulness for m in self.metrics if m.faithfulness is not None]
-        return sum(values) / len(values) if values else None
+        return self._avg("faithfulness")
     
     @property
     def avg_answer_relevancy(self) -> Optional[float]:
-        values = [m.answer_relevancy for m in self.metrics if m.answer_relevancy is not None]
-        return sum(values) / len(values) if values else None
+        return self._avg("answer_relevancy")
     
     @property
     def avg_context_precision(self) -> Optional[float]:
-        values = [m.context_precision for m in self.metrics if m.context_precision is not None]
-        return sum(values) / len(values) if values else None
+        return self._avg("context_precision")
     
     @property
     def avg_retrieval_latency(self) -> float:
-        if not self.metrics:
-            return 0.0
-        return sum(m.retrieval_latency_ms for m in self.metrics) / len(self.metrics)
+        return sum(m.retrieval_latency_ms for m in self.metrics) / len(self.metrics) if self.metrics else 0.0
     
     @property
     def avg_total_latency(self) -> float:
-        if not self.metrics:
-            return 0.0
-        return sum(m.total_latency_ms for m in self.metrics) / len(self.metrics)
+        return sum(m.total_latency_ms for m in self.metrics) / len(self.metrics) if self.metrics else 0.0
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "name": self.name,
-            "metrics": [m.to_dict() for m in self.metrics],
-            "created_at": self.created_at,
-            "metadata": self.metadata,
-        }
+        return {"session_id": self.session_id, "name": self.name,
+                "metrics": [m.to_dict() for m in self.metrics],
+                "created_at": self.created_at, "metadata": self.metadata}
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EvaluationSession":
-        session = cls(
-            session_id=data.get("session_id", ""),
-            name=data.get("name", ""),
-            created_at=data.get("created_at", datetime.now().isoformat()),
-            metadata=data.get("metadata", {}),
-        )
-        for m_data in data.get("metrics", []):
-            session.add_metrics(QueryMetrics.from_dict(m_data))
+        session = cls(session_id=data.get("session_id", ""), name=data.get("name", ""),
+                      created_at=data.get("created_at", datetime.now().isoformat()),
+                      metadata=data.get("metadata", {}))
+        for m in data.get("metrics", []):
+            session.add_metrics(QueryMetrics.from_dict(m))
         return session
 
 
@@ -141,243 +103,141 @@ class MetricsStore:
     def __init__(self, storage_path: Optional[Path] = None):
         self.storage_path = storage_path or Path("data/evaluation_metrics.json")
         self.sessions: Dict[str, EvaluationSession] = {}
-        logger.info(f"Initializing MetricsStore with storage: {self.storage_path}")
+        logger.info(f"MetricsStore initialized: {self.storage_path}")
         self._load()
     
     def _load(self) -> None:
-        """Load metrics from disk."""
         if self.storage_path.exists():
             try:
-                with open(self.storage_path, "r") as f:
-                    data = json.load(f)
-                    for session_data in data.get("sessions", []):
-                        session = EvaluationSession.from_dict(session_data)
-                        self.sessions[session.session_id] = session
-                logger.info(f"Loaded {len(self.sessions)} sessions from storage")
+                data = json.loads(self.storage_path.read_text())
+                for s in data.get("sessions", []):
+                    session = EvaluationSession.from_dict(s)
+                    self.sessions[session.session_id] = session
             except (json.JSONDecodeError, KeyError) as e:
                 logger.warning(f"Failed to load metrics: {e}")
-                self.sessions = {}
-        else:
-            logger.debug("No existing metrics file found")
     
     def _save(self) -> None:
-        """Save metrics to disk."""
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.storage_path, "w") as f:
-            data = {
-                "sessions": [s.to_dict() for s in self.sessions.values()]
-            }
-            json.dump(data, f, indent=2)
+            json.dump({"sessions": [s.to_dict() for s in self.sessions.values()]}, f, indent=2)
     
     def create_session(self, name: str, metadata: Optional[Dict] = None) -> EvaluationSession:
-        """Create a new evaluation session."""
         session_id = f"session_{int(time.time())}_{len(self.sessions)}"
-        session = EvaluationSession(
-            session_id=session_id,
-            name=name,
-            metadata=metadata or {},
-        )
+        session = EvaluationSession(session_id=session_id, name=name, metadata=metadata or {})
         self.sessions[session_id] = session
         self._save()
-        logger.info(f"Created new evaluation session: {name} (id={session_id})")
         return session
     
     def add_metrics(self, session_id: str, metrics: QueryMetrics) -> None:
-        """Add metrics to a session."""
         if session_id in self.sessions:
             self.sessions[session_id].add_metrics(metrics)
             self._save()
-            logger.debug(f"Added metrics to session {session_id}")
-        else:
-            logger.warning(f"Session {session_id} not found")
     
     def get_session(self, session_id: str) -> Optional[EvaluationSession]:
-        """Get a session by ID."""
         return self.sessions.get(session_id)
     
     def get_all_sessions(self) -> List[EvaluationSession]:
-        """Get all sessions."""
         return list(self.sessions.values())
     
     def delete_session(self, session_id: str) -> None:
-        """Delete a session."""
         if session_id in self.sessions:
             del self.sessions[session_id]
             self._save()
 
 
 def render_metric_card(label: str, value: Optional[float], suffix: str = "") -> None:
-    """Render a metric card with label and value."""
-    if value is not None:
-        st.metric(label=label, value=f"{value:.3f}{suffix}")
-    else:
-        st.metric(label=label, value="N/A")
+    st.metric(label=label, value=f"{value:.3f}{suffix}" if value is not None else "N/A")
 
 
 def render_aggregate_metrics(session: EvaluationSession) -> None:
-    """Render aggregate metrics for a session."""
     st.subheader("📊 Aggregate Metrics")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        render_metric_card("Faithfulness", session.avg_faithfulness)
-    
-    with col2:
-        render_metric_card("Answer Relevancy", session.avg_answer_relevancy)
-    
-    with col3:
-        render_metric_card("Context Precision", session.avg_context_precision)
-    
-    with col4:
-        st.metric(
-            label="Total Queries",
-            value=len(session.metrics),
-        )
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: render_metric_card("Faithfulness", session.avg_faithfulness)
+    with c2: render_metric_card("Answer Relevancy", session.avg_answer_relevancy)
+    with c3: render_metric_card("Context Precision", session.avg_context_precision)
+    with c4: st.metric(label="Total Queries", value=len(session.metrics))
 
 
 def render_latency_metrics(session: EvaluationSession) -> None:
-    """Render latency metrics for a session."""
     st.subheader("⏱️ Latency Metrics")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric(
-            label="Avg Retrieval Latency",
-            value=f"{session.avg_retrieval_latency:.1f} ms",
-        )
-    
-    with col2:
-        avg_gen = sum(m.generation_latency_ms for m in session.metrics) / len(session.metrics) if session.metrics else 0
-        st.metric(
-            label="Avg Generation Latency",
-            value=f"{avg_gen:.1f} ms",
-        )
-    
-    with col3:
-        st.metric(
-            label="Avg Total Latency",
-            value=f"{session.avg_total_latency:.1f} ms",
-        )
+    c1, c2, c3 = st.columns(3)
+    with c1: st.metric(label="Avg Retrieval", value=f"{session.avg_retrieval_latency:.1f} ms")
+    avg_gen = sum(m.generation_latency_ms for m in session.metrics) / len(session.metrics) if session.metrics else 0
+    with c2: st.metric(label="Avg Generation", value=f"{avg_gen:.1f} ms")
+    with c3: st.metric(label="Avg Total", value=f"{session.avg_total_latency:.1f} ms")
 
 
 def render_metrics_chart(session: EvaluationSession) -> None:
-    """Render metrics chart over queries."""
     st.subheader("📈 Metrics Over Queries")
-    
     if not session.metrics:
         st.info("No metrics data available.")
         return
-    
-    # Prepare data for chart
-    chart_data = {
+    import pandas as pd
+    df = pd.DataFrame({
         "Query #": list(range(1, len(session.metrics) + 1)),
         "Faithfulness": [m.faithfulness or 0 for m in session.metrics],
         "Answer Relevancy": [m.answer_relevancy or 0 for m in session.metrics],
         "Context Precision": [m.context_precision or 0 for m in session.metrics],
-    }
-    
-    import pandas as pd
-    df = pd.DataFrame(chart_data)
-    df_melted = df.melt(id_vars=["Query #"], var_name="Metric", value_name="Score")
-    
+    })
     st.line_chart(df.set_index("Query #")[["Faithfulness", "Answer Relevancy", "Context Precision"]])
 
 
 def render_latency_chart(session: EvaluationSession) -> None:
-    """Render latency chart over queries."""
     st.subheader("⏱️ Latency Over Queries")
-    
     if not session.metrics:
         st.info("No latency data available.")
         return
-    
     import pandas as pd
-    
-    chart_data = {
+    df = pd.DataFrame({
         "Query #": list(range(1, len(session.metrics) + 1)),
         "Retrieval (ms)": [m.retrieval_latency_ms for m in session.metrics],
         "Reranking (ms)": [m.rerank_latency_ms for m in session.metrics],
         "Generation (ms)": [m.generation_latency_ms for m in session.metrics],
-    }
-    
-    df = pd.DataFrame(chart_data)
+    })
     st.bar_chart(df.set_index("Query #"))
 
 
 def render_query_breakdown(session: EvaluationSession) -> None:
-    """Render per-query breakdown table."""
     st.subheader("🔍 Per-Query Breakdown")
-    
     if not session.metrics:
         st.info("No query data available.")
         return
-    
     import pandas as pd
-    
-    rows = []
-    for i, m in enumerate(session.metrics, 1):
-        rows.append({
-            "#": i,
-            "Query": m.query[:50] + "..." if len(m.query) > 50 else m.query,
-            "Faith.": f"{m.faithfulness:.3f}" if m.faithfulness else "N/A",
-            "Relev.": f"{m.answer_relevancy:.3f}" if m.answer_relevancy else "N/A",
-            "Prec.": f"{m.context_precision:.3f}" if m.context_precision else "N/A",
-            "Latency": f"{m.total_latency_ms:.0f}ms",
-            "Sources": m.num_sources,
-        })
-    
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    rows = [{
+        "#": i, "Query": m.query[:50] + "..." if len(m.query) > 50 else m.query,
+        "Faith.": f"{m.faithfulness:.3f}" if m.faithfulness else "N/A",
+        "Relev.": f"{m.answer_relevancy:.3f}" if m.answer_relevancy else "N/A",
+        "Prec.": f"{m.context_precision:.3f}" if m.context_precision else "N/A",
+        "Latency": f"{m.total_latency_ms:.0f}ms", "Sources": m.num_sources,
+    } for i, m in enumerate(session.metrics, 1)]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def render_content_type_distribution(session: EvaluationSession) -> None:
-    """Render content type distribution chart."""
     st.subheader("📁 Content Type Distribution")
-    
     if not session.metrics:
         st.info("No content type data available.")
         return
-    
-    # Count content types
     type_counts = {"text": 0, "table": 0, "image_summary": 0}
     for m in session.metrics:
         for ct in m.content_types:
             if ct in type_counts:
                 type_counts[ct] += 1
-    
     if sum(type_counts.values()) == 0:
         st.info("No content type data available.")
         return
-    
     import pandas as pd
-    
-    df = pd.DataFrame({
-        "Content Type": list(type_counts.keys()),
-        "Count": list(type_counts.values()),
-    })
-    
-    st.bar_chart(df.set_index("Content Type"))
+    st.bar_chart(pd.DataFrame({"Content Type": list(type_counts.keys()), "Count": list(type_counts.values())}).set_index("Content Type"))
 
 
 def render_session_selector(store: MetricsStore) -> Optional[EvaluationSession]:
-    """Render session selector and return selected session."""
     sessions = store.get_all_sessions()
-    
     if not sessions:
         st.info("No evaluation sessions found. Run an evaluation to see metrics.")
         return None
-    
-    session_options = {s.name: s.session_id for s in sessions}
-    selected_name = st.selectbox(
-        "Select Evaluation Session",
-        options=list(session_options.keys()),
-    )
-    
-    if selected_name:
-        return store.get_session(session_options[selected_name])
-    return None
+    options = {s.name: s.session_id for s in sessions}
+    selected = st.selectbox("Select Evaluation Session", options=list(options.keys()))
+    return store.get_session(options[selected]) if selected else None
 
 
 def render_dashboard_page():
