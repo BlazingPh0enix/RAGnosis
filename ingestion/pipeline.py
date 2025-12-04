@@ -107,7 +107,7 @@ class IngestionPipeline:
     This class coordinates:
     - PDF parsing via LlamaParse
     - Image extraction and saving
-    - Image summarization via GPT-4o-mini
+    - Image summarization via gpt-5-nano-2025-08-07
     - Output organization and persistence
     """
     

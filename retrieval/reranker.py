@@ -410,7 +410,7 @@ class LLMReranker:
     
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5-nano-2025-08-07",
         top_k: int = DEFAULT_RERANK_TOP_K,
     ):
         """
@@ -539,7 +539,7 @@ def create_reranker(
     
     if reranker_type == "llm":
         return LLMReranker(
-            model=model_name or "gpt-4o-mini",
+            model=model_name or "gpt-5-nano-2025-08-07",
             top_k=top_k,
         )
     else:

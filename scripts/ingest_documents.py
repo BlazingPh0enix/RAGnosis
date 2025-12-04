@@ -3,7 +3,7 @@
 CLI script to ingest PDF documents through the DocuLens pipeline.
 
 This script processes PDF documents using LlamaParse for parsing
-and GPT-4o-mini for image summarization, saving all outputs to
+and gpt-5-nano-2025-08-07 for image summarization, saving all outputs to
 the data/ directory.
 
 Usage:

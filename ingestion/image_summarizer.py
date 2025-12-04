@@ -72,7 +72,7 @@ class ImageSummary:
 
 class ImageSummarizer:
     """
-    Generates detailed text descriptions of images using GPT-4o-mini.
+    Generates detailed text descriptions of images using gpt-5-nano-2025-08-07.
     
     This class uses OpenAI's vision capabilities to analyze images and
     produce detailed descriptions suitable for RAG indexing.
@@ -90,7 +90,7 @@ class ImageSummarizer:
         
         Args:
             api_key: OpenAI API key. Defaults to settings.
-            model: Vision model to use (default: gpt-4o-mini for cost efficiency).
+            model: Vision model to use (default: gpt-5-nano-2025-08-07).
             prompt: Custom prompt for image description.
             max_tokens: Maximum tokens for the response.
         """

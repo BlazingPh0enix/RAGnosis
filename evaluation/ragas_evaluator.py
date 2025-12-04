@@ -144,7 +144,7 @@ class RagasEvaluator:
     def __init__(
         self,
         metrics: Optional[List] = None,
-        llm_model: str = "gpt-4o-mini",
+        llm_model: str = "gpt-5-nano-2025-08-07",
     ):
         """
         Initialize the RAGAS evaluator.
@@ -365,7 +365,7 @@ class RagasEvaluator:
 
 def create_evaluator(
     metrics: Optional[List] = None,
-    llm_model: str = "gpt-4o-mini",
+    llm_model: str = "gpt-5-nano-2025-08-07",
 ) -> RagasEvaluator:
     """
     Factory function to create a RagasEvaluator.
