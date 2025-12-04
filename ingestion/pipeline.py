@@ -20,6 +20,9 @@ from llama_cloud_services import LlamaParse
 from ingestion.llama_parse_client import create_parser
 from ingestion.image_summarizer import ImageSummarizer, ImageSummary, create_summarizer
 from config.settings import settings
+from config.logging_config import get_logger, log_execution_time, LogTimer
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -136,12 +139,16 @@ class IngestionPipeline:
         
         # Create directories if they don't exist
         self._ensure_directories()
+        
+        logger.info(f"IngestionPipeline initialized with output_dir: {self.output_dir}")
+        logger.debug(f"Image summarization: {'enabled' if summarize_images else 'disabled'}")
     
     def _ensure_directories(self) -> None:
         """Create output directories if they don't exist."""
         for directory in [self.parsed_dir, self.images_dir, self.summaries_dir]:
             directory.mkdir(parents=True, exist_ok=True)
     
+    @log_execution_time()
     def process(
         self,
         pdf_path: str,
@@ -162,19 +169,21 @@ class IngestionPipeline:
         pdf_path_obj = Path(pdf_path).resolve()
         document_name = pdf_path_obj.stem
         
+        logger.info(f"Starting document processing: {pdf_path_obj.name}")
+        logger.debug(f"Full path: {pdf_path_obj}, save_outputs={save_outputs}, skip_existing={skip_existing}")
+        
         # Check if already processed
         if skip_existing:
             existing = self._load_existing(document_name)
             if existing:
-                print(f"Skipping {document_name} - already processed")
+                logger.info(f"Skipping {document_name} - already processed (loaded from cache)")
                 return existing
-        
-        print(f"Processing document: {pdf_path_obj.name}")
         
         # Step 1: Parse the document using LlamaParse
         # The parse() method returns a JobResult with all content
-        print("  Parsing with LlamaParse...")
-        result = self.parser.parse(str(pdf_path_obj))
+        logger.debug("Step 1: Parsing with LlamaParse...")
+        with LogTimer(logger, f"LlamaParse parsing for {document_name}"):
+            result = self.parser.parse(str(pdf_path_obj))
         
         # Handle both single JobResult and List[JobResult] (for partitioned files)
         # For single file parsing, we typically get a single JobResult
@@ -189,9 +198,9 @@ class IngestionPipeline:
         auto_mode_triggered = job_result.job_metadata.job_auto_mode_triggered_pages or 0
         
         if is_cache_hit:
-            print("  (Cache hit - no credits used)")
+            logger.info(f"{document_name}: LlamaParse cache hit - no credits used")
         else:
-            print(f"  Pages: {page_count}, Auto-mode triggered: {auto_mode_triggered}")
+            logger.info(f"{document_name}: Parsed {page_count} pages (auto-mode triggered: {auto_mode_triggered})")
         
         # Step 2: Get markdown content
         markdown_content = job_result.get_markdown()
@@ -227,26 +236,27 @@ class IngestionPipeline:
                     image_data_list.append((image_data, img.name, page.page))
                     
                 except Exception as e:
-                    print(f"    Warning: Failed to extract image {img.name}: {e}")
+                    logger.warning(f"{document_name}: Failed to extract image {img.name}: {e}")
         
-        print(f"  Extracted {len(extracted_images)} images")
+        logger.info(f"{document_name}: Extracted {len(extracted_images)} images")
         
         # Step 4: Summarize images
         image_summaries = []
         if self.summarize_images and self.summarizer and image_data_list:
-            print(f"  Generating image summaries...")
-            for image_data, name, page_num in image_data_list:
-                try:
-                    summary = self.summarizer.summarize_image(
-                        image_data=image_data,
-                        image_name=name,
-                        page_number=page_num,
-                        source_document=document_name,
-                    )
-                    image_summaries.append(summary)
-                except Exception as e:
-                    print(f"    Warning: Failed to summarize {name}: {e}")
-            print(f"  Generated {len(image_summaries)} summaries")
+            logger.debug(f"{document_name}: Starting image summarization for {len(image_data_list)} images")
+            with LogTimer(logger, f"Image summarization for {document_name}"):
+                for image_data, name, page_num in image_data_list:
+                    try:
+                        summary = self.summarizer.summarize_image(
+                            image_data=image_data,
+                            image_name=name,
+                            page_number=page_num,
+                            source_document=document_name,
+                        )
+                        image_summaries.append(summary)
+                    except Exception as e:
+                        logger.warning(f"{document_name}: Failed to summarize {name}: {e}")
+            logger.info(f"{document_name}: Generated {len(image_summaries)} image summaries")
         
         # Step 5: Create the parsed document
         parsed_document = ParsedDocument(
@@ -263,9 +273,9 @@ class IngestionPipeline:
         # Step 6: Save outputs
         if save_outputs:
             self._save_outputs(parsed_document)
-            print(f"  Outputs saved to {self.output_dir}")
+            logger.debug(f"{document_name}: Outputs saved to {self.output_dir}")
         
-        print(f"  Done!")
+        logger.info(f"Completed processing document: {document_name}")
         return parsed_document
     
     def _save_outputs(self, document: ParsedDocument) -> None:
@@ -276,11 +286,13 @@ class IngestionPipeline:
             document: ParsedDocument to save.
         """
         doc_name = document.document_name
+        logger.debug(f"{doc_name}: Saving outputs to disk")
         
         # Save markdown content
         md_path = self.parsed_dir / f"{doc_name}.md"
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(document.markdown_content)
+        logger.debug(f"{doc_name}: Saved markdown to {md_path}")
         
         # Save image summaries
         if document.image_summaries:
@@ -347,7 +359,7 @@ class IngestionPipeline:
                 processed_at=metadata.get("processed_at", ""),
             )
         except Exception as e:
-            print(f"Warning: Failed to load existing document: {e}")
+            logger.warning(f"Failed to load existing document {document_name}: {e}")
             return None
     
     def process_directory(
@@ -370,10 +382,11 @@ class IngestionPipeline:
         directory_path = Path(directory)
         pdf_files = list(directory_path.glob("*.pdf")) + list(directory_path.glob("*.PDF"))
         
-        print(f"Found {len(pdf_files)} PDF files in {directory}")
+        logger.info(f"Found {len(pdf_files)} PDF files in {directory}")
         
         documents = []
-        for pdf_path in pdf_files:
+        for i, pdf_path in enumerate(pdf_files, 1):
+            logger.info(f"Processing file {i}/{len(pdf_files)}: {pdf_path.name}")
             try:
                 doc = self.process(
                     str(pdf_path),
@@ -382,8 +395,9 @@ class IngestionPipeline:
                 )
                 documents.append(doc)
             except Exception as e:
-                print(f"Error processing {pdf_path.name}: {e}")
+                logger.error(f"Error processing {pdf_path.name}: {e}", exc_info=True)
         
+        logger.info(f"Directory processing complete: {len(documents)}/{len(pdf_files)} documents processed successfully")
         return documents
 
 
@@ -401,6 +415,7 @@ def create_pipeline(
     Returns:
         Configured IngestionPipeline instance.
     """
+    logger.info(f"Creating IngestionPipeline (summarize_images={summarize_images})")
     parser = create_parser()
     summarizer = create_summarizer() if summarize_images else None
     

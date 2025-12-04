@@ -16,6 +16,10 @@ from dataclasses import dataclass, field
 
 import streamlit as st
 
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class QueryMetrics:
@@ -137,6 +141,7 @@ class MetricsStore:
     def __init__(self, storage_path: Optional[Path] = None):
         self.storage_path = storage_path or Path("data/evaluation_metrics.json")
         self.sessions: Dict[str, EvaluationSession] = {}
+        logger.info(f"Initializing MetricsStore with storage: {self.storage_path}")
         self._load()
     
     def _load(self) -> None:
@@ -148,8 +153,12 @@ class MetricsStore:
                     for session_data in data.get("sessions", []):
                         session = EvaluationSession.from_dict(session_data)
                         self.sessions[session.session_id] = session
-            except (json.JSONDecodeError, KeyError):
+                logger.info(f"Loaded {len(self.sessions)} sessions from storage")
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Failed to load metrics: {e}")
                 self.sessions = {}
+        else:
+            logger.debug("No existing metrics file found")
     
     def _save(self) -> None:
         """Save metrics to disk."""
@@ -170,6 +179,7 @@ class MetricsStore:
         )
         self.sessions[session_id] = session
         self._save()
+        logger.info(f"Created new evaluation session: {name} (id={session_id})")
         return session
     
     def add_metrics(self, session_id: str, metrics: QueryMetrics) -> None:
@@ -177,6 +187,9 @@ class MetricsStore:
         if session_id in self.sessions:
             self.sessions[session_id].add_metrics(metrics)
             self._save()
+            logger.debug(f"Added metrics to session {session_id}")
+        else:
+            logger.warning(f"Session {session_id} not found")
     
     def get_session(self, session_id: str) -> Optional[EvaluationSession]:
         """Get a session by ID."""

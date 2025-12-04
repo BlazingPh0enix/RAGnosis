@@ -14,6 +14,9 @@ from llama_index.core.retrievers import VectorIndexRetriever
 
 from index.indexer import Indexer, create_indexer
 from index.embeddings import create_embedding_service, configure_global_embeddings
+from config.logging_config import get_logger, log_execution_time, LogTimer
+
+logger = get_logger(__name__)
 
 
 # Default retrieval settings
@@ -137,6 +140,8 @@ class DocumentRetriever:
         self.top_k = top_k
         self.similarity_threshold = similarity_threshold
         
+        logger.info(f"Initializing DocumentRetriever (top_k={top_k}, threshold={similarity_threshold})")
+        
         # Create underlying retriever
         self._retriever = self._create_retriever()
     
@@ -147,6 +152,7 @@ class DocumentRetriever:
             similarity_top_k=self.top_k,
         )
     
+    @log_execution_time()
     def retrieve(
         self,
         query: str,
@@ -165,6 +171,9 @@ class DocumentRetriever:
         Returns:
             RetrievalResult containing retrieved nodes.
         """
+        effective_top_k = top_k or self.top_k
+        logger.debug(f"Retrieving for query: '{query[:50]}...' (top_k={effective_top_k})")
+        
         # Update top_k if specified
         if top_k is not None:
             self._retriever.similarity_top_k = top_k
@@ -172,7 +181,10 @@ class DocumentRetriever:
             self._retriever.similarity_top_k = self.top_k
         
         # Retrieve nodes
-        nodes_with_scores = self._retriever.retrieve(query)
+        with LogTimer(logger, "Vector retrieval"):
+            nodes_with_scores = self._retriever.retrieve(query)
+        
+        logger.debug(f"Initial retrieval returned {len(nodes_with_scores)} nodes")
         
         # Filter by similarity threshold
         if self.similarity_threshold > 0:
@@ -180,6 +192,7 @@ class DocumentRetriever:
                 n for n in nodes_with_scores
                 if n.score is not None and n.score >= self.similarity_threshold
             ]
+            logger.debug(f"After threshold filter: {len(nodes_with_scores)} nodes")
         
         # Filter by content type if specified
         if filter_content_types:
@@ -187,7 +200,9 @@ class DocumentRetriever:
                 n for n in nodes_with_scores
                 if n.node.metadata.get("content_type") in filter_content_types
             ]
+            logger.debug(f"After content type filter ({filter_content_types}): {len(nodes_with_scores)} nodes")
         
+        logger.info(f"Retrieved {len(nodes_with_scores)} nodes for query")
         return RetrievalResult(query=query, nodes=nodes_with_scores)
     
     def retrieve_text_only(
@@ -300,9 +315,12 @@ def create_retriever(
     Returns:
         Configured DocumentRetriever instance.
     """
+    logger.info(f"Creating DocumentRetriever (top_k={top_k})")
+    
     if index is None:
         if indexer is None:
             # Create new indexer and load index
+            logger.debug("Creating new indexer to load index")
             indexer = create_indexer(
                 collection_name=collection_name,
                 embedding_model=embedding_model,

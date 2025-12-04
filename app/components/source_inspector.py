@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from config.settings import settings
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # Content type styling
@@ -127,8 +130,11 @@ def render_source_inspector(
     st.subheader(title)
     
     if not sources:
+        logger.debug("No sources to display")
         st.info("No sources retrieved yet. Ask a question to see relevant sources.")
         return
+    
+    logger.debug(f"Rendering {len(sources)} sources")
     
     # Statistics
     if show_stats:

@@ -16,6 +16,7 @@ from llama_index.core.response_synthesizers import get_response_synthesizer, Res
 from llama_index.llms.openai import OpenAI
 
 from config.settings import settings
+from config.logging_config import get_logger, log_execution_time, LogTimer
 from retrieval.retriever import (
     DocumentRetriever,
     RetrievalResult,
@@ -24,6 +25,8 @@ from retrieval.retriever import (
 )
 from index.indexer import Indexer, create_indexer
 from index.embeddings import configure_global_embeddings, create_embedding_service
+
+logger = get_logger(__name__)
 
 
 # Default LLM settings
@@ -121,6 +124,8 @@ class DocuLensQueryEngine:
         self.top_k = top_k
         self.response_mode = response_mode
         
+        logger.info(f"Initializing DocuLensQueryEngine (model={llm_model}, top_k={top_k})")
+        
         # Create retriever if not provided
         if retriever is None:
             self.retriever = DocumentRetriever(index=index, top_k=top_k)
@@ -128,6 +133,7 @@ class DocuLensQueryEngine:
             self.retriever = retriever
         
         # Create LLM
+        logger.debug(f"Creating LLM instance (temperature={temperature})")
         self.llm = self._create_llm()
         
         # Create underlying query engine
@@ -160,6 +166,7 @@ class DocuLensQueryEngine:
             response_synthesizer=response_synthesizer,
         )
     
+    @log_execution_time()
     def query(
         self,
         query_str: str,
@@ -175,14 +182,23 @@ class DocuLensQueryEngine:
         Returns:
             QueryResult with response and sources.
         """
+        effective_top_k = top_k or self.top_k
+        logger.info(f"Processing query: '{query_str[:80]}...'" if len(query_str) > 80 else f"Processing query: '{query_str}'")
+        logger.debug(f"Query parameters: top_k={effective_top_k}, model={self.llm_model}")
+        
         # First, retrieve nodes using our custom retriever
-        retrieval_result = self.retriever.retrieve(
-            query=query_str,
-            top_k=top_k or self.top_k,
-        )
+        with LogTimer(logger, "Retrieval phase"):
+            retrieval_result = self.retriever.retrieve(
+                query=query_str,
+                top_k=effective_top_k,
+            )
         
         # Use the LlamaIndex query engine for response generation
-        response = self._query_engine.query(query_str)
+        with LogTimer(logger, "Response generation"):
+            response = self._query_engine.query(query_str)
+        
+        source_count = len(response.source_nodes) if response.source_nodes else 0
+        logger.info(f"Query completed: {source_count} sources used")
         
         return QueryResult(
             query=query_str,
@@ -191,7 +207,7 @@ class DocuLensQueryEngine:
             retrieval_result=retrieval_result,
             metadata={
                 "llm_model": self.llm_model,
-                "top_k": top_k or self.top_k,
+                "top_k": effective_top_k,
             },
         )
     
@@ -282,6 +298,8 @@ def create_query_engine(
     Returns:
         Configured DocuLensQueryEngine.
     """
+    logger.info(f"Creating DocuLensQueryEngine (model={llm_model}, top_k={top_k})")
+    
     # Configure embeddings
     embedding_service = create_embedding_service(model_name=embedding_model)
     configure_global_embeddings(model_name=embedding_service.model_name)
@@ -289,6 +307,7 @@ def create_query_engine(
     # Get or create index
     if index is None:
         if indexer is None:
+            logger.debug("Creating new indexer to load index")
             indexer = create_indexer(
                 collection_name=collection_name,
                 embedding_model=embedding_model,

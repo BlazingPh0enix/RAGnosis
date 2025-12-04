@@ -14,6 +14,9 @@ from pathlib import Path
 from openai import OpenAI
 
 from config.settings import settings
+from config.logging_config import get_logger, log_execution_time
+
+logger = get_logger(__name__)
 
 
 # Default prompt for image summarization
@@ -94,6 +97,7 @@ class ImageSummarizer:
         self.api_key = api_key or settings.OPENAI_API_KEY
         
         if not self.api_key:
+            logger.error("OpenAI API key not configured")
             raise ValueError(
                 "OpenAI API key is required. Set OPENAI_API_KEY environment variable."
             )
@@ -104,6 +108,7 @@ class ImageSummarizer:
         
         # Initialize OpenAI client
         self._client = OpenAI(api_key=self.api_key)
+        logger.debug(f"ImageSummarizer initialized with model: {model}")
     
     def summarize_image(
         self,
@@ -143,6 +148,8 @@ class ImageSummarizer:
         
         prompt += f"\n\nThis image is from page {page_number} of the document."
         
+        logger.debug(f"Summarizing image: {image_name} from page {page_number}")
+        
         try:
             response = self._client.responses.create(
                 model=self.model,
@@ -164,9 +171,11 @@ class ImageSummarizer:
             ) # type: ignore
             
             summary_text = response.choices[0].message.content or "No description generated."
+            logger.info(f"Generated summary for image: {image_name} ({len(summary_text)} chars)")
             
         except Exception as e:
             # Return error message as summary to avoid breaking the pipeline
+            logger.error(f"Failed to summarize image {image_name}: {e}")
             summary_text = f"[Error generating image description: {str(e)}]"
         
         return ImageSummary(
@@ -226,6 +235,8 @@ class ImageSummarizer:
         """
         summaries = []
         
+        logger.info(f"Starting batch summarization of {len(images)} images")
+        
         for img in images:
             try:
                 summary = self.summarize_image(
@@ -236,7 +247,7 @@ class ImageSummarizer:
                 )
                 summaries.append(summary)
             except Exception as e:
-                print(f"Warning: Failed to summarize image {img.get('name')}: {e}")
+                logger.warning(f"Failed to summarize image {img.get('name')}: {e}")
                 # Create a placeholder summary
                 summaries.append(ImageSummary(
                     image_name=img.get("name", "unknown"),
@@ -246,6 +257,7 @@ class ImageSummarizer:
                     source_document=source_document,
                 ))
         
+        logger.info(f"Batch summarization complete: {len(summaries)} summaries generated")
         return summaries
 
 

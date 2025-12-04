@@ -8,6 +8,10 @@ chat history display, and loading states.
 import streamlit as st
 from typing import List, Dict, Any, Optional, Callable
 
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 def init_chat_state():
     """Initialize chat-related session state variables."""
@@ -30,18 +34,22 @@ def add_message(role: str, content: str, sources: Optional[List[Dict]] = None):
         content: Message content
         sources: Optional source information for assistant messages
     """
+    logger.debug(f"Adding {role} message ({len(content)} chars)")
+    
     message: Dict[str, Any] = {
         "role": role,
         "content": content,
     }
     if sources:
         message["sources"] = sources
+        logger.debug(f"Message includes {len(sources)} sources")
     
     st.session_state.messages.append(message)
 
 
 def clear_chat_history():
     """Clear all chat history."""
+    logger.info("Clearing chat history")
     st.session_state.messages = []
     st.session_state.current_sources = []
 

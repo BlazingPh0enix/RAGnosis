@@ -23,6 +23,9 @@ from ragas.metrics import (
 from datasets import Dataset
 
 from config.settings import settings
+from config.logging_config import get_logger, log_execution_time, LogTimer
+
+logger = get_logger(__name__)
 
 
 # Default metrics to evaluate
@@ -153,6 +156,10 @@ class RagasEvaluator:
         self.metrics = metrics or DEFAULT_METRICS
         self.llm_model = llm_model
         self._results_history: List[EvaluationResult] = []
+        
+        metric_names = [m.name for m in self.metrics]
+        logger.info(f"Initializing RagasEvaluator with metrics: {metric_names}")
+        logger.debug(f"Using LLM model: {llm_model}")
     
     def create_sample(
         self,
@@ -209,6 +216,7 @@ class RagasEvaluator:
             ground_truth=ground_truth,
         )
     
+    @log_execution_time()
     def evaluate(
         self,
         samples: List[EvaluationSample],
@@ -225,11 +233,14 @@ class RagasEvaluator:
             EvaluationResult with metrics and per-sample scores.
         """
         if not samples:
+            logger.warning("No samples provided for evaluation")
             return EvaluationResult(
                 samples=[],
                 metrics={},
                 metadata={"error": "No samples provided"},
             )
+        
+        logger.info(f"Starting RAGAS evaluation with {len(samples)} samples")
         
         # Convert samples to RAGAS Dataset format
         data = {
@@ -246,11 +257,13 @@ class RagasEvaluator:
         
         # Run RAGAS evaluation
         try:
-            result = evaluate(
-                dataset=dataset,
-                metrics=self.metrics,
-                raise_exceptions=raise_exceptions,
-            )
+            logger.debug("Running RAGAS evaluation...")
+            with LogTimer(logger, "RAGAS evaluation"):
+                result = evaluate(
+                    dataset=dataset,
+                    metrics=self.metrics,
+                    raise_exceptions=raise_exceptions,
+                )
             
             # Extract aggregate metrics
             metrics = {}
@@ -287,9 +300,11 @@ class RagasEvaluator:
             )
             
             self._results_history.append(eval_result)
+            logger.info(f"RAGAS evaluation completed. Metrics: {metrics}")
             return eval_result
             
         except Exception as e:
+            logger.error(f"RAGAS evaluation failed: {e}", exc_info=True)
             if raise_exceptions:
                 raise
             return EvaluationResult(
@@ -362,4 +377,5 @@ def create_evaluator(
     Returns:
         Configured RagasEvaluator instance.
     """
+    logger.info(f"Creating RagasEvaluator (llm_model={llm_model})")
     return RagasEvaluator(metrics=metrics, llm_model=llm_model)

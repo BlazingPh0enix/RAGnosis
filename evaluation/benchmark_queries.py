@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 from enum import Enum
 
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class QueryType(Enum):
     """Types of queries for categorization."""
@@ -320,6 +324,8 @@ FACTUAL_QUERIES = [
 
 def create_default_benchmark_suite() -> BenchmarkSuite:
     """Create the default benchmark suite with all pre-defined queries."""
+    logger.info("Creating default benchmark suite")
+    
     suite = BenchmarkSuite(
         name="DocuLens Default Benchmark",
         description="Comprehensive benchmark suite for evaluating DocuLens RAG system",
@@ -338,6 +344,7 @@ def create_default_benchmark_suite() -> BenchmarkSuite:
         for query in queries:
             suite.add_query(query)
     
+    logger.debug(f"Created suite with {len(suite.queries)} queries")
     return suite
 
 
@@ -417,6 +424,7 @@ def get_benchmark_suite(suite_type: str = "default") -> BenchmarkSuite:
     Returns:
         BenchmarkSuite instance
     """
+    logger.info(f"Getting benchmark suite: {suite_type}")
     if suite_type == "quick":
         return create_quick_benchmark_suite()
     return create_default_benchmark_suite()

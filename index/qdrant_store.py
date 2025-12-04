@@ -14,7 +14,10 @@ from llama_index.core.schema import TextNode
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
 from config.settings import settings
+from config.logging_config import get_logger
 from index.embeddings import get_embedding_dimensions, DEFAULT_EMBEDDING_MODEL
+
+logger = get_logger(__name__)
 
 
 # Default collection settings
@@ -52,7 +55,9 @@ class QdrantStore:
         self.dimensions = get_embedding_dimensions(self.embedding_model)
         
         # Initialize Qdrant client
+        logger.info(f"Connecting to Qdrant at {self.url}")
         self.client = self._create_client()
+        logger.debug(f"Collection: {self.collection_name}, Dimensions: {self.dimensions}")
         
         # LlamaIndex vector store (created lazily)
         self._vector_store: Optional[QdrantVectorStore] = None
@@ -77,11 +82,11 @@ class QdrantStore:
             recreate: If True, delete existing collection first.
         """
         if recreate and self.collection_exists():
-            print(f"  Deleting existing collection: {self.collection_name}")
+            logger.warning(f"Deleting existing collection: {self.collection_name}")
             self.client.delete_collection(self.collection_name)
         
         if not self.collection_exists():
-            print(f"  Creating collection: {self.collection_name} (dimensions={self.dimensions})")
+            logger.info(f"Creating collection: {self.collection_name} (dimensions={self.dimensions})")
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=qdrant_models.VectorParams(
@@ -90,7 +95,7 @@ class QdrantStore:
                 ),
             )
         else:
-            print(f"  Collection already exists: {self.collection_name}")
+            logger.info(f"Collection already exists: {self.collection_name}")
     
     def get_vector_store(self) -> QdrantVectorStore:
         """
@@ -143,9 +148,11 @@ class QdrantStore:
             True if deleted, False if didn't exist.
         """
         if self.collection_exists():
+            logger.warning(f"Deleting collection: {self.collection_name}")
             self.client.delete_collection(self.collection_name)
             self._vector_store = None
             return True
+        logger.debug(f"Collection {self.collection_name} does not exist, nothing to delete")
         return False
     
     def count_vectors(self) -> int:

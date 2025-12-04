@@ -13,12 +13,15 @@ from openai import OpenAI
 from llama_index.core.schema import NodeWithScore
 
 from config.settings import settings
+from config.logging_config import get_logger, log_execution_time, LogTimer
 from generation.prompts import (
     get_system_prompt,
     format_context_prompt,
     get_no_context_response,
     REFINE_PROMPT,
 )
+
+logger = get_logger(__name__)
 
 
 # Default LLM settings
@@ -98,6 +101,8 @@ class ResponseSynthesizer:
         self.temperature = temperature
         self.max_tokens = max_tokens
         
+        logger.info(f"Initializing ResponseSynthesizer (model={model}, temp={temperature})")
+        
         # Initialize OpenAI client
         self.client = OpenAI(api_key=api_key or settings.OPENAI_API_KEY)
     
@@ -112,8 +117,10 @@ class ResponseSynthesizer:
             Formatted context string with page citations.
         """
         if not nodes:
+            logger.debug("No nodes to format")
             return ""
         
+        logger.debug(f"Formatting context from {len(nodes)} nodes")
         context_parts = []
         
         for node_with_score in nodes:
@@ -199,6 +206,7 @@ class ResponseSynthesizer:
                 return True
         return False
     
+    @log_execution_time()
     def synthesize(
         self,
         query: str,
@@ -216,13 +224,18 @@ class ResponseSynthesizer:
         Returns:
             SynthesizedResponse with generated answer and metadata.
         """
+        logger.info(f"Synthesizing response for query: '{query[:50]}...'" if len(query) > 50 else f"Synthesizing response for query: '{query}'")
+        
         # Handle empty context
         if not nodes:
+            logger.warning("No context nodes provided, returning no-context response")
             return SynthesizedResponse(
                 query=query,
                 response=get_no_context_response(),
                 metadata={"model": self.model, "no_context": True},
             )
+        
+        logger.debug(f"Generating response with {len(nodes)} context nodes")
         
         # Format context
         context = self.format_context(nodes)
@@ -237,23 +250,32 @@ class ResponseSynthesizer:
         user_prompt = format_context_prompt(context, query)
         
         # Generate response
-        completion = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
+        logger.debug(f"Calling {self.model} API...")
+        with LogTimer(logger, f"LLM generation ({self.model})"):
+            completion = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
         
         response_text = completion.choices[0].message.content or ""
         
         # Extract citations
         citations, cited_pages = self.extract_citations(response_text)
+        logger.debug(f"Response contains {len(citations)} citations from pages: {cited_pages}")
         
         # Get source info
         sources = self.get_source_info(nodes)
+        
+        # Log token usage
+        if completion.usage:
+            logger.debug(f"Token usage: prompt={completion.usage.prompt_tokens}, completion={completion.usage.completion_tokens}, total={completion.usage.total_tokens}")
+        
+        logger.info(f"Response synthesized successfully ({len(response_text)} chars)")
         
         return SynthesizedResponse(
             query=query,
@@ -346,6 +368,7 @@ def create_response_synthesizer(
     Returns:
         Configured ResponseSynthesizer instance.
     """
+    logger.info(f"Creating ResponseSynthesizer (model={model})")
     return ResponseSynthesizer(
         model=model,
         temperature=temperature,

@@ -29,6 +29,11 @@ from app.components.source_inspector import (
     render_source_stats,
 )
 from config.settings import settings
+from config.logging_config import get_logger, setup_logging
+
+# Initialize logging
+setup_logging()
+logger = get_logger(__name__)
 
 
 # Page configuration
@@ -42,6 +47,7 @@ st.set_page_config(
 
 def init_app_state():
     """Initialize all application state."""
+    logger.debug("Initializing application state")
     init_chat_state()
     
     if "query_engine" not in st.session_state:
@@ -65,11 +71,15 @@ def load_query_engine(collection_name: Optional[str] = None):
     Returns:
         DocuLensQueryEngine instance or None on error
     """
+    logger.info(f"Loading query engine for collection: {collection_name}")
     try:
         from retrieval.query_engine import load_query_engine
         
-        return load_query_engine(collection_name=collection_name)
+        engine = load_query_engine(collection_name=collection_name)
+        logger.info("Query engine loaded successfully")
+        return engine
     except Exception as e:
+        logger.error(f"Failed to load query engine: {e}", exc_info=True)
         st.error(f"Failed to load query engine: {e}")
         return None
 
@@ -84,7 +94,10 @@ def handle_query(query: str) -> dict:
     Returns:
         Dict with 'response' and 'sources'
     """
+    logger.info(f"Handling query: '{query[:50]}...'" if len(query) > 50 else f"Handling query: '{query}'")
+    
     if st.session_state.query_engine is None:
+        logger.warning("Query attempted with no query engine loaded")
         return {
             "response": "❌ Query engine not loaded. Please check the index configuration.",
             "sources": [],
@@ -94,11 +107,13 @@ def handle_query(query: str) -> dict:
         # Query the engine
         result = st.session_state.query_engine.query(query)
         
+        logger.info(f"Query successful, {len(result.sources)} sources returned")
         return {
             "response": result.response,
             "sources": result.sources,
         }
     except Exception as e:
+        logger.error(f"Error processing query: {e}", exc_info=True)
         return {
             "response": f"❌ Error processing query: {str(e)}",
             "sources": [],
@@ -229,6 +244,8 @@ def render_main_content():
 
 def main():
     """Main application entry point."""
+    logger.info("Starting DocuLens Streamlit application")
+    
     # Initialize state
     init_app_state()
     

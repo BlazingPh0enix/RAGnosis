@@ -15,10 +15,13 @@ from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from llama_index.core.schema import NodeWithScore, TextNode
 
 from retrieval.retriever import RetrievalResult
+from config.logging_config import get_logger, log_execution_time, LogTimer
 
 if TYPE_CHECKING:
     from sentence_transformers import CrossEncoder
     from openai import OpenAI
+
+logger = get_logger(__name__)
 
 
 # Default reranker settings
@@ -169,6 +172,9 @@ class CrossModalReranker:
         self.use_gpu = use_gpu
         self.batch_size = batch_size
         
+        logger.info(f"Initializing CrossModalReranker (model={model_name}, top_k={top_k})")
+        logger.debug(f"GPU: {use_gpu}, batch_size: {batch_size}")
+        
         # Lazy load the model
         self._model: Optional["CrossEncoder"] = None
         self._tokenizer = None
@@ -180,13 +186,15 @@ class CrossModalReranker:
                 from sentence_transformers import CrossEncoder
                 
                 device = "cuda" if self.use_gpu else "cpu"
+                logger.info(f"Loading reranker model: {self.model_name} on {device}")
                 self._model = CrossEncoder(
                     self.model_name,
                     device=device,
                     max_length=512,
                 )
-                print(f"Loaded reranker model: {self.model_name}")
+                logger.info(f"Reranker model loaded successfully")
             except ImportError:
+                logger.error("sentence-transformers is required for reranking")
                 raise ImportError(
                     "sentence-transformers is required for reranking. "
                     "Install with: pip install sentence-transformers"
@@ -211,6 +219,7 @@ class CrossModalReranker:
         
         return content
     
+    @log_execution_time()
     def rerank(
         self,
         query: str,
@@ -229,6 +238,7 @@ class CrossModalReranker:
             RerankResult with reranked nodes.
         """
         if not nodes:
+            logger.debug("No nodes to rerank, returning empty result")
             return RerankResult(
                 query=query,
                 nodes=[],
@@ -241,6 +251,7 @@ class CrossModalReranker:
         assert self._model is not None, "Model failed to load"
         
         top_k = top_k or self.top_k
+        logger.info(f"Reranking {len(nodes)} nodes (top_k={top_k})")
         start_time = time.time()
         
         # Prepare query-document pairs
@@ -267,6 +278,7 @@ class CrossModalReranker:
             reranked_nodes.append(new_node)
         
         rerank_time_ms = (time.time() - start_time) * 1000
+        logger.info(f"Reranking completed in {rerank_time_ms:.2f}ms")
         
         return RerankResult(
             query=query,
@@ -376,6 +388,7 @@ class CrossModalReranker:
             reranked_nodes.append(new_node)
         
         rerank_time_ms = (time.time() - start_time) * 1000
+        logger.info(f"Multimodal reranking completed in {rerank_time_ms:.2f}ms")
         
         return RerankResult(
             query=query,
@@ -410,6 +423,7 @@ class LLMReranker:
         self.model = model
         self.top_k = top_k
         self._client: Optional["OpenAI"] = None
+        logger.info(f"Initializing LLMReranker (model={model}, top_k={top_k})")
     
     def _get_client(self) -> "OpenAI":
         """Lazy load OpenAI client."""
@@ -418,12 +432,13 @@ class LLMReranker:
             self._client = OpenAI()
         return self._client
     
+    @log_execution_time()
     def rerank(
         self,
         query: str,
         nodes: List[NodeWithScore],
         top_k: Optional[int] = None,
-    ) -> RerankResult:
+    ) -> Optional[RerankResult]:
         """
         Rerank nodes using LLM-based scoring.
         
@@ -436,6 +451,7 @@ class LLMReranker:
             RerankResult with reranked nodes.
         """
         if not nodes:
+            logger.debug("No nodes to rerank, returning empty result")
             return RerankResult(
                 query=query,
                 nodes=[],
@@ -444,6 +460,7 @@ class LLMReranker:
             )
         
         top_k = top_k or self.top_k
+        logger.info(f"LLM reranking {len(nodes)} nodes (top_k={top_k}, model={self.model})")
         start_time = time.time()
         client = self._get_client()
         
@@ -489,6 +506,7 @@ Return only a number from 0-10."""
             reranked_nodes.append(new_node)
         
         rerank_time_ms = (time.time() - start_time) * 1000
+        logger.info(f"LLM reranking completed in {rerank_time_ms:.2f}ms")
         
         return RerankResult(
             query=query,
@@ -517,6 +535,8 @@ def create_reranker(
     Returns:
         Configured reranker instance.
     """
+    logger.info(f"Creating reranker (type={reranker_type}, top_k={top_k})")
+    
     if reranker_type == "llm":
         return LLMReranker(
             model=model_name or "gpt-4o-mini",

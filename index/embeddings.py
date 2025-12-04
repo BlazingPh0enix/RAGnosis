@@ -12,6 +12,10 @@ from llama_index.core import Settings
 from llama_index.core.schema import TextNode
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
+from config.logging_config import get_logger, LogTimer
+
+logger = get_logger(__name__)
+
 
 # Default embedding model - high quality, balanced size
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -43,8 +47,10 @@ def get_embedding_model(
         Configured HuggingFaceEmbedding instance.
     """
     model_name = model_name or DEFAULT_EMBEDDING_MODEL
+    logger.info(f"Loading embedding model: {model_name}")
     
     if device:
+        logger.debug(f"Using device: {device}")
         return HuggingFaceEmbedding(model_name=model_name, device=device)
     return HuggingFaceEmbedding(model_name=model_name)
 
@@ -66,6 +72,7 @@ def configure_global_embeddings(
     Returns:
         The configured embedding model.
     """
+    logger.info(f"Configuring global embeddings: {model_name or DEFAULT_EMBEDDING_MODEL}")
     embed_model = get_embedding_model(model_name, device)
     Settings.embed_model = embed_model
     return embed_model
@@ -100,11 +107,12 @@ def embed_nodes(
     texts = [node.text for node in nodes]
     
     # Get embeddings in batch
-    print(f"  Embedding {len(texts)} nodes...")
-    embeddings = embed_model.get_text_embedding_batch(
-        texts,
-        show_progress=show_progress,
-    )
+    logger.info(f"Embedding {len(texts)} nodes...")
+    with LogTimer(logger, f"Batch embedding of {len(texts)} texts"):
+        embeddings = embed_model.get_text_embedding_batch(
+            texts,
+            show_progress=show_progress,
+        )
     
     # Assign embeddings to nodes
     for node, embedding in zip(nodes, embeddings):
@@ -149,8 +157,10 @@ class EmbeddingService:
             device: Device to run model on ('cpu', 'cuda', etc.).
         """
         self.model_name = model_name or DEFAULT_EMBEDDING_MODEL
+        logger.info(f"Initializing EmbeddingService with model: {self.model_name}")
         self.embed_model = get_embedding_model(self.model_name, device)
         self.dimensions = get_embedding_dimensions(self.model_name)
+        logger.debug(f"Embedding dimensions: {self.dimensions}")
     
     def embed_text(self, text: str) -> List[float]:
         """

@@ -5,6 +5,10 @@ This module defines the prompts used for generating responses
 with proper citations in [Page X] format.
 """
 
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 # Main system prompt for RAG response generation
 SYSTEM_PROMPT = """You are DocuLens, an intelligent document assistant that answers questions based on retrieved document context.
 
@@ -114,6 +118,8 @@ def get_system_prompt(multimodal: bool = False) -> str:
     Returns:
         System prompt string.
     """
+    prompt_type = "multimodal" if multimodal else "standard"
+    logger.debug(f"Using {prompt_type} system prompt")
     return MULTIMODAL_PROMPT if multimodal else SYSTEM_PROMPT
 
 

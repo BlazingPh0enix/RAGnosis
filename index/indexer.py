@@ -14,6 +14,7 @@ from llama_index.core import VectorStoreIndex
 from llama_index.core.schema import TextNode
 
 from config.settings import settings
+from config.logging_config import get_logger, log_execution_time, LogTimer
 from index.chunking import DocumentChunker, create_chunker
 from index.embeddings import (
     EmbeddingService,
@@ -21,6 +22,8 @@ from index.embeddings import (
     configure_global_embeddings,
 )
 from index.qdrant_store import QdrantStore, create_qdrant_store
+
+logger = get_logger(__name__)
 
 
 class Indexer:
@@ -54,6 +57,8 @@ class Indexer:
         self.embedding_service = embedding_service or create_embedding_service()
         self.chunker = chunker or create_chunker()
         self.data_dir = Path(data_dir or settings.DATA_DIR)
+        
+        logger.info(f"Initializing Indexer with data_dir: {self.data_dir}")
         
         # Configure global embeddings for LlamaIndex
         configure_global_embeddings(model_name=self.embedding_service.model_name)
@@ -165,6 +170,7 @@ class Indexer:
             source_document=document_name,
         )
     
+    @log_execution_time()
     def index_document(
         self,
         document_name: str,
@@ -180,32 +186,33 @@ class Indexer:
         Returns:
             List of indexed TextNodes.
         """
-        print(f"Indexing document: {document_name}")
+        logger.info(f"Indexing document: {document_name}")
         
         # Load parsed data
         parsed = self.load_parsed_document(document_name)
         image_summaries = self.load_image_summaries(document_name)
         
         if not parsed["markdown_content"]:
-            print(f"  Warning: No markdown content found for {document_name}")
+            logger.warning(f"No markdown content found for {document_name}")
             return []
         
         # Chunk document
-        print(f"  Chunking content...")
+        logger.debug(f"{document_name}: Chunking content...")
         nodes = self.chunk_document(
             document_name=document_name,
             markdown_content=parsed["markdown_content"],
             image_summaries=image_summaries,
         )
-        print(f"  Created {len(nodes)} nodes")
+        logger.info(f"{document_name}: Created {len(nodes)} nodes")
         
         # Embed nodes
-        print(f"  Embedding nodes...")
+        logger.debug(f"{document_name}: Embedding nodes...")
         nodes = self.embedding_service.embed_nodes(nodes, show_progress=show_progress)
         
         self._indexed_documents.append(document_name)
         return nodes
     
+    @log_execution_time()
     def index_all_documents(
         self,
         document_names: Optional[List[str]] = None,
@@ -228,34 +235,37 @@ class Indexer:
             document_names = self.list_parsed_documents()
         
         if not document_names:
-            print("No documents found to index.")
+            logger.warning("No documents found to index.")
             return None
         
-        print(f"Indexing {len(document_names)} documents...")
+        logger.info(f"Starting indexing of {len(document_names)} documents...")
         
         # Create/recreate collection
         self.qdrant_store.create_collection(recreate=recreate_collection)
         
         # Index all documents
         all_nodes = []
-        for doc_name in document_names:
+        for i, doc_name in enumerate(document_names, 1):
+            logger.info(f"Processing document {i}/{len(document_names)}: {doc_name}")
             nodes = self.index_document(doc_name, show_progress=show_progress)
             all_nodes.extend(nodes)
         
-        print(f"\nTotal nodes: {len(all_nodes)}")
+        logger.info(f"Total nodes across all documents: {len(all_nodes)}")
         
         # Build vector store index
-        print("Building vector store index...")
+        logger.info("Building vector store index...")
         storage_context = self.qdrant_store.get_storage_context()
         
-        index = VectorStoreIndex(
-            nodes=all_nodes,
-            storage_context=storage_context,
-            embed_model=self.embedding_service.embed_model,
-            show_progress=show_progress,
-        )
+        with LogTimer(logger, "VectorStoreIndex creation"):
+            index = VectorStoreIndex(
+                nodes=all_nodes,
+                storage_context=storage_context,
+                embed_model=self.embedding_service.embed_model,
+                show_progress=show_progress,
+            )
         
-        print(f"Index built successfully. Vectors in Qdrant: {self.qdrant_store.count_vectors()}")
+        vector_count = self.qdrant_store.count_vectors()
+        logger.info(f"Index built successfully. Vectors in Qdrant: {vector_count}")
         
         return index
     
@@ -266,16 +276,21 @@ class Indexer:
         Returns:
             VectorStoreIndex loaded from Qdrant.
         """
+        logger.info(f"Loading index from collection: {self.qdrant_store.collection_name}")
+        
         if not self.qdrant_store.collection_exists():
+            logger.error(f"Collection '{self.qdrant_store.collection_name}' does not exist")
             raise ValueError(
                 f"Collection '{self.qdrant_store.collection_name}' does not exist. "
                 "Run index_all_documents() first."
             )
         
-        return VectorStoreIndex.from_vector_store(
+        index = VectorStoreIndex.from_vector_store(
             vector_store=self.qdrant_store.get_vector_store(),  # type: ignore
             embed_model=self.embedding_service.embed_model,
         )
+        logger.info("Index loaded successfully")
+        return index
     
     def get_index_stats(self) -> dict:
         """
@@ -314,6 +329,8 @@ def create_indexer(
     Returns:
         Configured Indexer instance.
     """
+    logger.info(f"Creating Indexer (collection={collection_name}, model={embedding_model}, chunk_size={chunk_size})")
+    
     qdrant_store = create_qdrant_store(
         collection_name=collection_name,
         embedding_model=embedding_model,

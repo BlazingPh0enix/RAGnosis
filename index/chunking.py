@@ -14,6 +14,9 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import TextNode
 
 from config.settings import settings
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # Default chunking parameters
@@ -167,6 +170,7 @@ def create_text_nodes(
     Returns:
         List of TextNodes with metadata.
     """
+    logger.debug(f"Creating text nodes for {source_document} (chunk_size={chunk_size}, overlap={chunk_overlap})")
     nodes = []
     node_index = 0
     
@@ -217,6 +221,7 @@ def create_text_nodes(
                 nodes.append(node)
                 node_index += 1
     
+    logger.debug(f"{source_document}: Created {len(nodes)} text/table nodes")
     return nodes
 
 
@@ -240,6 +245,7 @@ def create_image_summary_nodes(
     Returns:
         List of TextNodes for image summaries.
     """
+    logger.debug(f"{source_document}: Creating nodes for {len(image_summaries)} image summaries")
     nodes = []
     
     for i, summary in enumerate(image_summaries):
@@ -314,6 +320,8 @@ class DocumentChunker:
         Returns:
             List of TextNodes ready for embedding and indexing.
         """
+        logger.info(f"Chunking document: {source_document}")
+        
         # Create text/table nodes
         text_nodes = create_text_nodes(
             markdown_content=markdown_content,
@@ -331,6 +339,7 @@ class DocumentChunker:
         # Combine all nodes
         all_nodes = text_nodes + image_nodes
         
+        logger.info(f"{source_document}: Created {len(all_nodes)} total nodes ({len(text_nodes)} text, {len(image_nodes)} image)")
         return all_nodes
     
     def chunk_from_parsed_document(self, parsed_doc) -> List[TextNode]:
