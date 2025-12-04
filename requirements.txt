@@ -2,9 +2,11 @@ openai
 streamlit
 qdrant-client
 llama-index
+llama-index-embeddings-huggingface
 llama-cloud-services
 ragas
 python-dotenv
 Pillow
 pydantic
 requests
+sentence-transformers
