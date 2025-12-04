@@ -12,6 +12,11 @@ from typing import Dict, Optional, Callable
 from dataclasses import dataclass, field
 import tempfile
 import shutil
+import hashlib
+
+# Apply nest_asyncio to allow nested event loops
+import nest_asyncio
+nest_asyncio.apply()
 
 # Apply nest_asyncio to allow nested event loops
 import nest_asyncio
@@ -48,6 +53,9 @@ class ProcessingJob:
     
     # Cancellation flag
     cancelled: bool = False
+    
+    # File hash for duplicate detection
+    _file_hash: Optional[str] = None
     
     def __post_init__(self):
         self.steps = {
@@ -98,12 +106,38 @@ class DocumentProcessorService:
         """Create a new processing job."""
         job_id = str(uuid.uuid4())[:8]
         
-        # Save file to temp directory
+        # Calculate file hash for duplicate detection
+        file_hash = hashlib.sha256(file_content).hexdigest()[:16]  # Short hash for readability
+        
+        # Check if this document has been processed before
+        existing_job = self._find_existing_processed_document(file_hash)
+        if existing_job:
+            logger.info(f"Document {filename} already processed (hash: {file_hash}), reusing existing job {existing_job.job_id}")
+            # Return a copy of the existing job with new ID and filename
+            job = ProcessingJob(
+                job_id=job_id,
+                filename=filename,
+                file_path=existing_job.file_path,  # Reuse existing file
+                collection_name=existing_job.collection_name,
+                status=ProcessingStatus.COMPLETED,  # Mark as completed
+            )
+            job.page_count = existing_job.page_count
+            job.image_count = existing_job.image_count
+            job.chunk_count = existing_job.chunk_count
+            job.collection_name = existing_job.collection_name
+            job.current_step = "Document already processed"
+            job.progress = 100
+            job.updated_at = datetime.utcnow()
+            
+            self.jobs[job_id] = job
+            return job
+        
+        # Save file to temp directory (only for new documents)
         file_path = self.temp_dir / f"{job_id}_{filename}"
         file_path.write_bytes(file_content)
         
-        # Create collection name from job_id
-        collection_name = f"doculens_{job_id}"
+        # Create collection name from hash for consistency
+        collection_name = f"doculens_{file_hash}"
         
         job = ProcessingJob(
             job_id=job_id,
@@ -111,10 +145,22 @@ class DocumentProcessorService:
             file_path=str(file_path),
             collection_name=collection_name,
         )
+        
+        # Store hash for future duplicate detection
+        job._file_hash = file_hash
+        
         self.jobs[job_id] = job
         
-        logger.info(f"Created job {job_id} for file {filename}")
+        logger.info(f"Created job {job_id} for file {filename} (hash: {file_hash})")
         return job
+    
+    def _find_existing_processed_document(self, file_hash: str) -> Optional[ProcessingJob]:
+        """Find an existing completed job for the same document hash."""
+        for job in self.jobs.values():
+            if (hasattr(job, '_file_hash') and job._file_hash == file_hash and 
+                job.status == ProcessingStatus.COMPLETED):
+                return job
+        return None
     
     def get_job(self, job_id: str) -> Optional[ProcessingJob]:
         """Get a job by ID."""
@@ -137,6 +183,11 @@ class DocumentProcessorService:
         job = self.jobs.get(job_id)
         if not job:
             logger.error(f"Job {job_id} not found")
+            return
+        
+        # Skip processing if already completed (duplicate document)
+        if job.status == ProcessingStatus.COMPLETED:
+            logger.info(f"Job {job_id}: Skipping processing - document already processed")
             return
         
         try:
@@ -215,35 +266,45 @@ class DocumentProcessorService:
             job.current_step = "Generating embeddings"
             job.update_step("embedding", "in_progress", 0, "Creating embedding service...")
             
-            # Create indexer with job-specific collection
-            embedding_service = create_embedding_service()
-            configure_global_embeddings(model_name=embedding_service.model_name)
-            
-            qdrant_store = create_qdrant_store(
-                collection_name=job.collection_name,
-                embedding_model=embedding_service.model_name,
-            )
-            
-            chunker = create_chunker()
-            
-            indexer = Indexer(
-                qdrant_store=qdrant_store,
-                embedding_service=embedding_service,
-                chunker=chunker,
-                data_dir=str(settings.DATA_DIR),
-            )
+            def _init_services():
+                # Create indexer with job-specific collection
+                embedding_service = create_embedding_service()
+                configure_global_embeddings(model_name=embedding_service.model_name)
+                
+                qdrant_store = create_qdrant_store(
+                    collection_name=job.collection_name,
+                    embedding_model=embedding_service.model_name,
+                )
+                
+                chunker = create_chunker()
+                
+                indexer = Indexer(
+                    qdrant_store=qdrant_store,
+                    embedding_service=embedding_service,
+                    chunker=chunker,
+                    data_dir=str(settings.DATA_DIR),
+                )
+                return indexer, embedding_service, qdrant_store
+
+            # Run initialization in executor to avoid blocking event loop
+            indexer, embedding_service, qdrant_store = await loop.run_in_executor(None, _init_services)
             
             job.update_step("embedding", "in_progress", 30, "Chunking document...")
             
-            # Load image summaries
-            image_summaries = indexer.load_image_summaries(parsed_doc.document_name)
+            def _chunk_doc():
+                # Load image summaries
+                image_summaries = indexer.load_image_summaries(parsed_doc.document_name)
+                
+                # Chunk document
+                return indexer.chunk_document(
+                    document_name=parsed_doc.document_name,
+                    markdown_content=parsed_doc.markdown_content,
+                    image_summaries=image_summaries,
+                )
+
+            # Run chunking in executor
+            nodes = await loop.run_in_executor(None, _chunk_doc)
             
-            # Chunk document
-            nodes = indexer.chunk_document(
-                document_name=parsed_doc.document_name,
-                markdown_content=parsed_doc.markdown_content,
-                image_summaries=image_summaries,
-            )
             job.chunk_count = len(nodes)
             
             job.update_step("embedding", "in_progress", 60, f"Embedding {len(nodes)} chunks...")
@@ -268,7 +329,10 @@ class DocumentProcessorService:
             job.update_step("indexing", "in_progress", 30, "Creating Qdrant collection...")
             
             # Create collection
-            qdrant_store.create_collection(recreate=True)
+            await loop.run_in_executor(
+                None,
+                lambda: qdrant_store.create_collection(recreate=True)
+            )
             
             job.update_step("indexing", "in_progress", 60, "Indexing vectors...")
             

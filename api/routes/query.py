@@ -5,6 +5,7 @@ Handles document querying and response generation.
 """
 
 import sys
+import json
 from pathlib import Path
 
 # Add project root to path
@@ -12,6 +13,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from api.schemas import QueryRequest, QueryResponse, SourceInfo, ErrorResponse
 from api.dependencies import get_qdrant_client
@@ -92,6 +94,61 @@ async def query_documents(request: QueryRequest):
     except Exception as e:
         logger.error(f"Query failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
+
+
+@router.post("/stream")
+async def query_documents_streaming(request: QueryRequest):
+    """
+    Query indexed documents and get a streaming AI-generated response.
+    
+    Returns a server-sent events stream of the response.
+    """
+    # Import here to avoid startup delays
+    from retrieval.query_engine import load_query_engine
+    
+    logger.info(f"Streaming query: '{request.query[:50]}...' on collection '{request.collection_name}'")
+    
+    # Verify collection exists
+    try:
+        client = get_qdrant_client()
+        collections = [c.name for c in client.get_collections().collections]
+        
+        if request.collection_name not in collections:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Collection '{request.collection_name}' not found. "
+                       f"Available: {', '.join(collections) if collections else 'none'}",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to check collections: {e}")
+        raise HTTPException(status_code=500, detail=f"Qdrant error: {str(e)}")
+    
+    # Load query engine and execute streaming query
+    try:
+        engine = load_query_engine(
+            collection_name=request.collection_name,
+            top_k=request.top_k,
+        )
+        
+        def generate():
+            for item in engine.query_streaming(request.query, top_k=request.top_k):
+                if item["type"] == "sources":
+                    yield f"data: {json.dumps(item)}\n\n"
+                elif item["type"] == "chunk":
+                    yield f"data: {json.dumps(item)}\n\n"
+            yield "data: [DONE]\n\n"
+        
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+        
+    except Exception as e:
+        logger.error(f"Streaming query failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Streaming query failed: {str(e)}")
 
 
 @router.post("/retrieve")

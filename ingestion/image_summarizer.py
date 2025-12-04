@@ -91,17 +91,24 @@ class ImageSummarizer:
         prompt += f"\n\nThis image is from page {page_number}."
         
         try:
-            response = self._client.responses.create(
+            response = self._client.chat.completions.create(
                 model=self.model,
-                input=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "input_image", "image_url": {"url": f"data:image/{img_fmt};base64,{base64_image}"}},
-                    ],
-                }],
-                max_tokens=self.max_tokens,
-            )  # type: ignore
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/{img_fmt};base64,{base64_image}"
+                                }
+                            },
+                        ],
+                    }
+                ],
+                max_completion_tokens=self.max_tokens,
+            )
             summary_text = response.choices[0].message.content or "No description generated."
             logger.info(f"Generated summary for {image_name} ({len(summary_text)} chars)")
         except Exception as e:
