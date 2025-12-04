@@ -25,6 +25,15 @@ class Settings:
     # Other options
     PAGE_PREFIX: str = os.getenv("PAGE_PREFIX", "[Page {pageNumber}]")
     DATA_DIR: str = os.getenv("DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data"))
+    
+    # FastAPI Settings
+    API_HOST: str = os.getenv("API_HOST", "localhost")
+    API_PORT: int = int(os.getenv("API_PORT", "8000"))
+    API_URL: str = os.getenv("API_URL", "http://localhost:8000")
+    
+    # Upload Settings
+    MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
+    ALLOWED_EXTENSIONS: str = os.getenv("ALLOWED_EXTENSIONS", ".pdf")
 
 
 def get_settings() -> Settings:

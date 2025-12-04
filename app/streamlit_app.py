@@ -1,20 +1,19 @@
-"""
-DocuLens - Multi-Modal RAG Streamlit Application
+"""DocuLens - Multi-Modal RAG Streamlit Application
 
-This is the main Streamlit application for DocuLens, providing an
-interactive chat interface with source inspection capabilities.
+Interactive chat interface with file upload and source inspection.
+Uses FastAPI backend for document processing.
 
 Run with: streamlit run app/streamlit_app.py
 """
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import requests
 import streamlit as st
 
 from app.components.chat_interface import (
@@ -28,12 +27,21 @@ from app.components.source_inspector import (
     render_source_inspector,
     render_source_stats,
 )
+from app.components.file_upload import (
+    init_upload_state,
+    render_upload_section,
+    render_api_status,
+    check_api_health,
+)
 from config.settings import settings
 from config.logging_config import get_logger, setup_logging
 
 # Initialize logging
 setup_logging()
 logger = get_logger(__name__)
+
+# API URL
+API_URL = settings.API_URL
 
 
 # Page configuration
@@ -49,44 +57,18 @@ def init_app_state():
     """Initialize all application state."""
     logger.debug("Initializing application state")
     init_chat_state()
+    init_upload_state()
     
-    if "query_engine" not in st.session_state:
-        st.session_state.query_engine = None
-    
-    if "index_loaded" not in st.session_state:
-        st.session_state.index_loaded = False
+    if "query_ready" not in st.session_state:
+        st.session_state.query_ready = False
     
     if "error_message" not in st.session_state:
         st.session_state.error_message = None
 
 
-@st.cache_resource
-def load_query_engine(collection_name: Optional[str] = None):
-    """
-    Load the query engine (cached to avoid reloading).
-    
-    Args:
-        collection_name: Optional Qdrant collection name
-        
-    Returns:
-        DocuLensQueryEngine instance or None on error
-    """
-    logger.info(f"Loading query engine for collection: {collection_name}")
-    try:
-        from retrieval.query_engine import load_query_engine
-        
-        engine = load_query_engine(collection_name=collection_name)
-        logger.info("Query engine loaded successfully")
-        return engine
-    except Exception as e:
-        logger.error(f"Failed to load query engine: {e}", exc_info=True)
-        st.error(f"Failed to load query engine: {e}")
-        return None
-
-
 def handle_query(query: str) -> dict:
     """
-    Handle a user query and return the response.
+    Handle a user query via the FastAPI backend.
     
     Args:
         query: User's question
@@ -94,77 +76,98 @@ def handle_query(query: str) -> dict:
     Returns:
         Dict with 'response' and 'sources'
     """
-    logger.info(f"Handling query: '{query[:50]}...'" if len(query) > 50 else f"Handling query: '{query}'")
+    collection = st.session_state.get("current_collection")
     
-    if st.session_state.query_engine is None:
-        logger.warning("Query attempted with no query engine loaded")
+    if not collection:
+        logger.warning("Query attempted with no collection")
         return {
-            "response": "❌ Query engine not loaded. Please check the index configuration.",
+            "response": "❌ No document loaded. Please upload and process a document first.",
             "sources": [],
         }
     
+    logger.info(f"Querying collection '{collection}': '{query[:50]}...'")
+    
     try:
-        # Query the engine
-        result = st.session_state.query_engine.query(query)
+        response = requests.post(
+            f"{API_URL}/api/query",
+            json={
+                "query": query,
+                "collection_name": collection,
+                "top_k": 5,
+            },
+            timeout=60,
+        )
         
-        logger.info(f"Query successful, {len(result.sources)} sources returned")
+        if response.status_code == 200:
+            data = response.json()
+            logger.info(f"Query successful, {len(data.get('sources', []))} sources")
+            
+            # Format sources for display
+            sources = [
+                {
+                    "page_number": s.get("page_number", 1),
+                    "content_type": s.get("content_type", "text"),
+                    "source_document": s.get("source_document", "unknown"),
+                    "score": s.get("score", 0),
+                    "text_preview": s.get("text_preview", ""),
+                    "image_name": s.get("image_name"),
+                }
+                for s in data.get("sources", [])
+            ]
+            
+            return {
+                "response": data.get("response", "No response generated"),
+                "sources": sources,
+            }
+        else:
+            error = response.json().get("detail", "Query failed")
+            logger.error(f"Query failed: {error}")
+            return {
+                "response": f"❌ Error: {error}",
+                "sources": [],
+            }
+            
+    except requests.exceptions.ConnectionError:
+        logger.error("API connection error")
         return {
-            "response": result.response,
-            "sources": result.sources,
+            "response": "❌ Cannot connect to API server. Please ensure it's running.",
+            "sources": [],
         }
     except Exception as e:
-        logger.error(f"Error processing query: {e}", exc_info=True)
+        logger.error(f"Query error: {e}")
         return {
-            "response": f"❌ Error processing query: {str(e)}",
+            "response": f"❌ Error: {str(e)}",
             "sources": [],
         }
 
 
 def render_sidebar():
-    """Render the sidebar with configuration options."""
+    """Render the sidebar with upload and configuration."""
     with st.sidebar:
         st.title("🔍 DocuLens")
         st.caption("Multi-Modal RAG System")
         
         st.divider()
         
-        # Index configuration
-        st.subheader("⚙️ Configuration")
-        
-        collection_name = st.text_input(
-            "Collection Name",
-            value=settings.QDRANT_COLLECTION or "doculens",
-            help="Qdrant collection to query",
-        )
-        
-        # Load index button
-        if st.button("🔄 Load Index", use_container_width=True):
-            with st.spinner("Loading index..."):
-                engine = load_query_engine(collection_name)
-                if engine:
-                    st.session_state.query_engine = engine
-                    st.session_state.index_loaded = True
-                    st.success("✅ Index loaded successfully!")
-                else:
-                    st.session_state.index_loaded = False
-                    st.error("Failed to load index")
-        
-        # Status indicator
-        if st.session_state.index_loaded:
-            st.success("✅ Index Active")
-        else:
-            st.warning("⚠️ Index Not Loaded")
+        # API Status
+        render_api_status()
         
         st.divider()
         
-        # Chat controls
-        st.subheader("💬 Chat Controls")
-        
-        if st.button("🗑️ Clear Chat", use_container_width=True):
-            clear_chat_history()
-            st.rerun()
+        # File Upload Section
+        render_upload_section()
         
         st.divider()
+        
+        # Chat controls (only show if document is ready)
+        if st.session_state.get("processing_complete"):
+            st.subheader("💬 Chat Controls")
+            
+            if st.button("🗑️ Clear Chat", use_container_width=True):
+                clear_chat_history()
+                st.rerun()
+            
+            st.divider()
         
         # Info
         st.subheader("ℹ️ About")
@@ -179,16 +182,30 @@ def render_sidebar():
         )
         
         st.divider()
-        st.caption("Made with ❤️ using LlamaIndex + Qdrant")
+        st.caption("Made with ❤️ using LlamaIndex + FastAPI + Qdrant")
 
 
 def render_main_content():
     """Render the main content area with chat and sources."""
+    # Check if API is available
+    api_available = check_api_health()
+    document_ready = st.session_state.get("processing_complete", False)
+    
     # Two-column layout
     chat_col, source_col = st.columns([3, 2])
     
     with chat_col:
         st.header("💬 Chat with Documents")
+        
+        # Show status messages
+        if not api_available:
+            st.error(
+                "⚠️ **API Server Not Running**\n\n"
+                "Start the FastAPI backend:\n"
+                "```\nuvicorn api.main:app --reload --port 8000\n```"
+            )
+        elif not document_ready:
+            st.info("📄 **Upload a document** in the sidebar to start chatting.")
         
         # Welcome message if no chat history
         if not st.session_state.get("messages"):
@@ -197,36 +214,34 @@ def render_main_content():
         # Chat history
         display_chat_history()
         
-        # Processing indicator
-        if st.session_state.get("is_processing"):
-            with st.chat_message("assistant"):
-                with st.spinner("🔍 Searching and generating response..."):
-                    pass
+        # Chat input (enabled only when document is ready)
+        chat_enabled = api_available and document_ready
         
-        # Chat input
-        if not st.session_state.get("is_processing"):
-            if prompt := st.chat_input(
-                "Ask a question about your documents...",
-                disabled=not st.session_state.index_loaded,
-            ):
-                # Add user message
-                add_message("user", prompt)
-                
-                # Process query
-                with st.spinner(""):
-                    result = handle_query(prompt)
-                
-                # Add assistant response
-                add_message("assistant", result["response"], result.get("sources", []))
-                
-                # Update current sources
-                st.session_state.current_sources = result.get("sources", [])
-                
-                st.rerun()
+        if prompt := st.chat_input(
+            "Ask a question about your document...",
+            disabled=not chat_enabled,
+        ):
+            # Add user message
+            add_message("user", prompt)
+            
+            # Process query
+            with st.spinner("🔍 Searching and generating response..."):
+                result = handle_query(prompt)
+            
+            # Add assistant response
+            add_message("assistant", result["response"], result.get("sources", []))
+            
+            # Update current sources
+            st.session_state.current_sources = result.get("sources", [])
+            
+            st.rerun()
         
-        # Show message if index not loaded
-        if not st.session_state.index_loaded:
-            st.warning("⚠️ Please load an index from the sidebar to start chatting.")
+        # Helper text
+        if not chat_enabled:
+            if api_available:
+                st.caption("👆 Upload and process a document to enable chat")
+            else:
+                st.caption("👆 Start the API server first")
     
     with source_col:
         st.header("📚 Sources")
@@ -234,12 +249,20 @@ def render_main_content():
         # Get current sources
         sources = st.session_state.get("current_sources", [])
         
-        # Render source inspector
-        render_source_inspector(
-            sources=sources,
-            title="Retrieved Context",
-            show_stats=True,
-        )
+        if sources:
+            # Render source inspector
+            render_source_inspector(
+                sources=sources,
+                title="Retrieved Context",
+                show_stats=True,
+            )
+        else:
+            st.caption("Sources will appear here after you ask a question.")
+            
+            # Show collection info if available
+            if document_ready:
+                collection = st.session_state.get("current_collection", "")
+                st.info(f"📁 Active collection: `{collection}`")
 
 
 def main():

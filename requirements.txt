@@ -1,13 +1,31 @@
+# Core
 openai
+python-dotenv
+pydantic
+
+# FastAPI Backend
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Streamlit Frontend
 streamlit
+requests
+
+# Vector Store
 qdrant-client
+
+# LlamaIndex
 llama-index
 llama-index-embeddings-huggingface
 llama-index-vector-stores-qdrant
 llama-cloud-services
-ragas
-python-dotenv
-Pillow
-pydantic
-requests
+
+# Embeddings
 sentence-transformers
+
+# Evaluation
+ragas
+
+# Utilities
+Pillow
