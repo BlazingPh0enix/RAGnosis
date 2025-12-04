@@ -14,6 +14,10 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# Apply nest_asyncio to allow nested event loops (fixes LlamaParse/LlamaIndex async issues)
+import nest_asyncio
+nest_asyncio.apply()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

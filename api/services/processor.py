@@ -13,6 +13,10 @@ from dataclasses import dataclass, field
 import tempfile
 import shutil
 
+# Apply nest_asyncio to allow nested event loops
+import nest_asyncio
+nest_asyncio.apply()
+
 from api.schemas import ProcessingStatus, ProcessingStep, JobStatus
 from config.settings import settings
 from config.logging_config import get_logger
