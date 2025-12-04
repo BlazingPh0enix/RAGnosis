@@ -24,9 +24,6 @@ llama-cloud-services
 # Embeddings
 sentence-transformers
 
-# Evaluation
-ragas
-
 # Utilities
 Pillow
 nest_asyncio

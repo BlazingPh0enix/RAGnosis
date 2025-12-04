@@ -117,7 +117,6 @@ doculens/
 ├── ingestion/             # Document parsing
 ├── index/                 # Chunking & indexing
 ├── retrieval/             # Query engine
-├── evaluation/            # RAGAS metrics
 └── run.py                 # Run script
 ```
 
