@@ -2,5 +2,9 @@ openai
 streamlit
 qdrant-client
 llama-index
-llama-parse
+llama-cloud-services
 ragas
+python-dotenv
+Pillow
+pydantic
+requests

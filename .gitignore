@@ -87,3 +87,9 @@ temp/
 
 # OS
 Thumbs.db
+
+# Local Test Files
+test_data/
+.github/
+converted_data/
+data/
