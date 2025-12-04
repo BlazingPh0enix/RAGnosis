@@ -3,6 +3,7 @@ streamlit
 qdrant-client
 llama-index
 llama-index-embeddings-huggingface
+llama-index-vector-stores-qdrant
 llama-cloud-services
 ragas
 python-dotenv
